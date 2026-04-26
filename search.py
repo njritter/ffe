@@ -37,6 +37,60 @@ def load_filter_options():
     return fanzines, provenances
 
 
+@st.cache_data
+def load_fanzine_summaries():
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT
+            fanzine,
+            COUNT(DISTINCT issue_folder)  AS issue_count,
+            COUNT(*)                      AS page_count,
+            MIN(date)                     AS first_date,
+            MAX(date)                     AS last_date,
+            GROUP_CONCAT(DISTINCT provenance) AS sources
+        FROM pages
+        WHERE fanzine IS NOT NULL
+        GROUP BY fanzine
+        ORDER BY fanzine COLLATE NOCASE
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+@st.cache_data
+def load_fanzine_issues(fanzine: str):
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT
+            issue_folder,
+            issue_code,
+            date,
+            date_raw,
+            COUNT(*) AS page_count
+        FROM pages
+        WHERE fanzine = ? AND issue_folder IS NOT NULL
+        GROUP BY issue_folder
+        ORDER BY date ASC NULLS LAST, issue_number ASC NULLS LAST
+    """, [fanzine]).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fmt_date(iso: str) -> str:
+    """Format an ISO date string (YYYY, YYYY-MM, YYYY-MM-DD) for display."""
+    if not iso:
+        return "—"
+    months = ["Jan","Feb","Mar","Apr","May","Jun",
+              "Jul","Aug","Sep","Oct","Nov","Dec"]
+    parts = iso.split("-")
+    try:
+        if len(parts) == 3:
+            return f"{months[int(parts[1])-1]} {int(parts[2])}, {parts[0]}"
+        if len(parts) == 2:
+            return f"{months[int(parts[1])-1]} {parts[0]}"
+    except (ValueError, IndexError):
+        pass
+    return iso
+
+
 def sanitize_fts(query: str) -> str:
     """Strip characters that break FTS5 query syntax, keep meaningful words."""
     cleaned = re.sub(r'[^\w\s]', ' ', query)
@@ -297,7 +351,7 @@ QUESTION: {question}"""
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_search, tab_ask = st.tabs(["Search", "Ask"])
+tab_search, tab_fanzines, tab_ask = st.tabs(["Search", "Fanzines", "Ask"])
 
 fanzines, provenances = load_filter_options()
 
@@ -338,6 +392,55 @@ with tab_search:
                        (" (limit 200)" if len(rows) == 200 else ""))
             for row in rows:
                 render_page_card(row, query)
+
+# ── Fanzines tab ─────────────────────────────────────────────────────────────
+with tab_fanzines:
+    summaries = load_fanzine_summaries()
+
+    filter_text = st.text_input("Filter fanzines", placeholder="Type a title…", label_visibility="collapsed")
+
+    if filter_text:
+        summaries = [s for s in summaries if filter_text.lower() in s["fanzine"].lower()]
+
+    st.caption(f"{len(summaries)} fanzine{'s' if len(summaries) != 1 else ''}")
+
+    for s in summaries:
+        # Date range label
+        if s["first_date"] and s["last_date"] and s["first_date"] != s["last_date"]:
+            date_range = f"{fmt_date(s['first_date'])} – {fmt_date(s['last_date'])}"
+        elif s["first_date"]:
+            date_range = fmt_date(s["first_date"])
+        else:
+            date_range = "Date unknown"
+
+        header = (
+            f"{s['fanzine']}  ·  "
+            f"{s['issue_count']} issue{'s' if s['issue_count'] != 1 else ''}  ·  "
+            f"{s['page_count']} pages  ·  "
+            f"{date_range}"
+        )
+
+        with st.expander(header):
+            # Sources
+            if s["sources"]:
+                source_list = ", ".join(
+                    src.strip() for src in s["sources"].split(",") if src.strip()
+                )
+                st.markdown(f"**Sources:** {source_list}")
+
+            # Issue table
+            issues = load_fanzine_issues(s["fanzine"])
+            if issues:
+                st.markdown("**Issues in archive:**")
+                rows_md = "| Issue | Date | Pages |\n|---|---|---|\n"
+                for iss in issues:
+                    code = iss["issue_code"].upper() if iss["issue_code"] else "—"
+                    folder = iss["issue_folder"] or "—"
+                    display = folder if not iss["issue_code"] else f"{code} · {folder}"
+                    date_disp = fmt_date(iss["date"]) or iss["date_raw"] or "—"
+                    rows_md += f"| {display} | {date_disp} | {iss['page_count']} |\n"
+                st.markdown(rows_md)
+
 
 # ── Ask tab ───────────────────────────────────────────────────────────────────
 with tab_ask:
