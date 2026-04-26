@@ -37,8 +37,18 @@ def load_filter_options():
     return fanzines, provenances
 
 
+def sanitize_fts(query: str) -> str:
+    """Strip characters that break FTS5 query syntax, keep meaningful words."""
+    cleaned = re.sub(r'[^\w\s]', ' ', query)
+    tokens = cleaned.split()
+    return " ".join(tokens) if tokens else ""
+
+
 def fts_search(query, limit=10):
     conn = get_conn()
+    clean = sanitize_fts(query)
+    if not clean:
+        return []
     return conn.execute(
         """
         SELECT p.id, p.fanzine, p.issue_folder, p.issue_code, p.volume,
@@ -51,7 +61,7 @@ def fts_search(query, limit=10):
         ORDER BY bm25(pages_fts)
         LIMIT ?
         """,
-        [query, limit],
+        [clean, limit],
     ).fetchall()
 
 
@@ -60,8 +70,10 @@ def keyword_search(query, fanzine, provenance, date_from, date_to):
     conditions, params = [], []
 
     if query:
-        conditions.append("p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)")
-        params.append(query)
+        clean = sanitize_fts(query)
+        if clean:
+            conditions.append("p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?)")
+            params.append(clean)
     if fanzine:
         conditions.append("p.fanzine = ?")
         params.append(fanzine)
@@ -133,7 +145,7 @@ def render_page_card(row, query=""):
 def get_db_sample(question: str, n: int = 20) -> list:
     """Quick FTS search to gather context about what's in the DB for this question."""
     conn = get_conn()
-    keywords = " ".join(re.findall(r'\b\w{4,}\b', question)[:6])
+    keywords = sanitize_fts(" ".join(re.findall(r'\b\w{4,}\b', question)[:6]))
     if not keywords:
         return []
     try:
