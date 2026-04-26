@@ -4,3 +4,7 @@
 letters.db
 letters.db-shm
 letters.db-wal
+fanzines.db
+fanzines.db-shm
+fanzines.db-wal
+data/
