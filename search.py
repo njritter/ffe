@@ -140,6 +140,51 @@ def render_page_card(row, query=""):
             st.text(row["body"])
 
 
+def group_by_issue(rows):
+    """Return an ordered list of (issue_key, meta, pages) tuples."""
+    groups = {}
+    for row in rows:
+        key = (row["fanzine"] or "", row["issue_folder"] or "")
+        if key not in groups:
+            groups[key] = {
+                "fanzine": row["fanzine"],
+                "issue_folder": row["issue_folder"],
+                "issue_code": row["issue_code"],
+                "date": row["date"],
+                "date_raw": row["date_raw"],
+                "provenance": row["provenance"],
+                "pages": [],
+            }
+        groups[key]["pages"].append(row)
+    return list(groups.values())
+
+
+def issue_label(group):
+    label = group["fanzine"] or "?"
+    if group["issue_folder"]:
+        label += f" — {group['issue_folder']}"
+    n = len(group["pages"])
+    label += f"  ({n} page{'s' if n != 1 else ''})"
+    if group["date"] or group["date_raw"]:
+        label += f"  ·  {group['date'] or group['date_raw']}"
+    return label
+
+
+def render_issue_group(group, query=""):
+    with st.expander(issue_label(group)):
+        c = st.columns(3)
+        c[0].markdown(f"**Date**  \n{group['date'] or group['date_raw'] or '—'}")
+        c[1].markdown(f"**Issue**  \n{group['issue_code'] or group['issue_folder'] or '—'}")
+        c[2].markdown(f"**Source**  \n{group['provenance'] or '—'}")
+        st.divider()
+        for row in group["pages"]:
+            page_id = f"p.{row['page']}" if row["page"] else row["filename"]
+            with st.expander(f"Page {page_id}"):
+                st.markdown(highlight(row["body"], query))
+                with st.expander("Full text"):
+                    st.text(row["body"])
+
+
 # ── Gemini helpers ────────────────────────────────────────────────────────────
 
 def get_db_sample(question: str, n: int = 20) -> list:
@@ -266,6 +311,8 @@ with tab_search:
         col1, col2 = st.columns(2)
         date_from = col1.text_input("Date from", placeholder="1930")
         date_to = col2.text_input("Date to", placeholder="1950")
+        st.divider()
+        view_mode = st.radio("View", ["Grouped by issue", "Individual pages"], index=0)
         st.caption(f"Database: `{DB_PATH}`")
 
     if not any([query, fanzine, provenance, date_from, date_to]):
@@ -278,11 +325,17 @@ with tab_search:
             date_from or None,
             date_to or None,
         )
-        st.caption(f"{len(rows)} result{'s' if len(rows) != 1 else ''}" +
-                   (" (limit 200)" if len(rows) == 200 else ""))
         if not rows:
             st.warning("No pages matched.")
+        elif view_mode == "Grouped by issue":
+            groups = group_by_issue(rows)
+            st.caption(f"{len(groups)} issue{'s' if len(groups) != 1 else ''} · {len(rows)} page{'s' if len(rows) != 1 else ''}" +
+                       (" (page limit 200)" if len(rows) == 200 else ""))
+            for group in groups:
+                render_issue_group(group, query)
         else:
+            st.caption(f"{len(rows)} page{'s' if len(rows) != 1 else ''}" +
+                       (" (limit 200)" if len(rows) == 200 else ""))
             for row in rows:
                 render_page_card(row, query)
 
