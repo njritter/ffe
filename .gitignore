@@ -1,2 +1,6 @@
 .venv/
 .env
+.DS_Store
+letters.db
+letters.db-shm
+letters.db-wal
